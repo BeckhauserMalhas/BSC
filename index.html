@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Balanced Scorecard</title>
+<script src="https://cdn.tailwindcss.com/3.4.17"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<style>.inp{width:100%;border:1px solid #cbd5e1;border-radius:.5rem;padding:.4rem .6rem;margin-top:.15rem}
+.btn{background:#0f172a;color:#fff;border-radius:.5rem;padding:.4rem .8rem;font-size:.85rem}
+@media print{.noprint{display:none!important}}</style>
+</head>
+<body class="bg-slate-100 text-slate-800">
+
+<!-- ====== 1) CONFIGURAÇÃO: cole aqui as chaves do Supabase (veja GUIA.md) ====== -->
+<script>
+const SUPABASE_URL = "https://phjomfiowlmgplchjpqv.supabase.co";
+const SUPABASE_KEY = "sb_publishable_ZgbgvbXxwTjBHNAPplA6kg_VtV6V1TV";
+</script>
+
+<header class="bg-white shadow noprint sticky top-0 z-40">
+  <div class="max-w-6xl mx-auto px-3 py-2">
+    <h1 class="font-bold text-lg">📊 Balanced Scorecard</h1>
+    <nav class="flex gap-1 overflow-x-auto mt-1 text-sm">
+      <button class="tb px-3 py-1 rounded" data-t="identidade" onclick="go('identidade')">Identidade</button>
+      <button class="tb px-3 py-1 rounded" data-t="perspectivas" onclick="go('perspectivas')">Perspectivas</button>
+      <button class="tb px-3 py-1 rounded" data-t="mapa" onclick="go('mapa')">Mapa Estratégico</button>
+      <button class="tb px-3 py-1 rounded" data-t="relatorio" onclick="go('relatorio')">Acompanhamento</button>
+    </nav>
+  </div>
+</header>
+<main id="app" class="max-w-6xl mx-auto p-3">Carregando…</main>
+
+<script>
+// ====== 2) ESTADO E UTILITÁRIOS ======
+const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+const PERS = [['financeira','Financeira','#16a34a'],['clientes','Clientes','#2563eb'],
+              ['processos','Processos Internos','#d97706'],['aprendizado','Aprendizado e Crescimento','#7c3aed']];
+const STATUS = ['Não iniciada','Em andamento','Concluída'];
+let S = {org:{},temas:[],objs:[],kpis:[],inis:[],rels:[]}, tab='identidade', F={resp:'',pers:''};
+const $ = s => document.querySelector(s);
+const by = (a,id) => a.find(x => x.id == id);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+// % de atingimento (se "menor é melhor", inverte a conta) e semáforo
+function pct(k){ const m=+k.meta, a=+k.atual; if(!m) return 0;
+  return k.menor_melhor ? (a<=0 ? 100 : m/a*100) : a/m*100; }
+const cor = p => p>=90 ? '#16a34a' : p>=70 ? '#eab308' : '#dc2626';   // verde / amarelo / vermelho
+
+// ====== 3) BANCO DE DADOS ======
+async function load(){
+  const names = ['organizacao','temas','objetivos','kpis','iniciativas','relacoes'];
+  const r = await Promise.all(names.map(n => db.from(n).select('*').order('id')));
+  const err = r.find(x => x.error);
+  if(err){ $('#app').innerHTML = `<p class="p-4 bg-red-100 rounded">Erro ao conectar: ${esc(err.error.message)}<br>Confira as chaves e se rodou o schema.sql.</p>`; return; }
+  [S.orgs,S.temas,S.objs,S.kpis,S.inis,S.rels] = r.map(x => x.data);
+  S.org = S.orgs[0] || {};
+  render();
+}
+async function sv(table,row,id){
+  const r = id ? await db.from(table).update(row).eq('id',id) : await db.from(table).insert(row);
+  if(r.error) alert(r.error.message); await load();
+}
+async function dl(table,id){ if(!confirm('Excluir? (itens ligados também serão removidos)')) return;
+  const r = await db.from(table).delete().eq('id',id); if(r.error) alert(r.error.message); await load(); }
+
+// ====== 4) FORMULÁRIO GENÉRICO (janela modal) ======
+// campos: {k:chave, l:rótulo, t:'text|number|date|color|area|select|checks', o:opções[[valor,texto]], v:valor atual}
+function form(title, fields, onSave){
+  const m = document.createElement('div');
+  m.className = 'fixed inset-0 bg-black/50 flex items-center justify-center p-3 z-50 overflow-auto';
+  const inp = f => f.t==='select' ? `<select name="${f.k}" class="inp">${f.o.map(o=>`<option value="${o[0]}" ${o[0]==f.v?'selected':''}>${esc(o[1])}</option>`).join('')}</select>`
+    : f.t==='area' ? `<textarea name="${f.k}" rows="3" class="inp">${esc(f.v)}</textarea>`
+    : f.t==='checks' ? f.o.map(o=>`<div><label class="font-normal"><input type="checkbox" name="${f.k}" value="${o[0]}" ${(f.v||[]).includes(o[0])?'checked':''}> ${esc(o[1])}</label></div>`).join('')
+    : `<input name="${f.k}" type="${f.t||'text'}" ${f.t==='number'?'step="any"':''} value="${esc(f.v)}" class="inp">`;
+  m.innerHTML = `<form class="bg-white rounded-xl p-5 w-full max-w-md space-y-3"><h3 class="font-bold">${title}</h3>
+    ${fields.map(f=>`<label class="block text-sm font-medium">${f.l}${inp(f)}</label>`).join('')}
+    <div class="flex gap-2 justify-end"><button type="button" class="px-3 py-1" id="cx">Cancelar</button><button class="btn">Salvar</button></div></form>`;
+  document.body.appendChild(m);
+  m.querySelector('#cx').onclick = () => m.remove();
+  m.querySelector('form').onsubmit = async e => { e.preventDefault();
+    const fd = new FormData(e.target), r = {};
+    fields.forEach(f => { r[f.k] = f.t==='checks' ? fd.getAll(f.k).map(Number)
+      : (f.t==='number'||f.k.endsWith('_id')||f.t==='date') && fd.get(f.k)==='' ? null
+      : f.t==='number' ? Number(fd.get(f.k)) : fd.get(f.k); });
+    m.remove(); await onSave(r); };
+}
+
+// ====== 5) AÇÕES (editar/criar) ======
+const te = id => { const t = id ? by(S.temas,id) : {cor:'#2563eb'};
+  if(!id && S.temas.length>=4) return alert('Máximo de 4 temas estratégicos.');
+  form(id?'Editar tema':'Novo tema',[{k:'nome',l:'Nome',v:t.nome},{k:'cor',l:'Cor',t:'color',v:t.cor},{k:'descricao',l:'Descrição',t:'area',v:t.descricao}], r=>sv('temas',r,id)); };
+const oe = (id,p) => { const o = id ? by(S.objs,id) : {perspectiva:p};
+  form(id?'Editar objetivo':'Novo objetivo',[{k:'titulo',l:'Objetivo estratégico',v:o.titulo},{k:'responsavel',l:'Responsável (dono)',v:o.responsavel},
+    {k:'tema_id',l:'Tema estratégico',t:'select',o:[['','— nenhum —'],...S.temas.map(t=>[t.id,t.nome])],v:o.tema_id}],
+    r=>sv('objetivos',{...r,perspectiva:o.perspectiva},id)); };
+const ke = (id,oid) => { const k = id ? by(S.kpis,id) : {menor_melhor:false,atual:0};
+  form(id?'Editar KPI':'Novo KPI',[{k:'nome',l:'Indicador',v:k.nome},{k:'unidade',l:'Unidade (%, R$, un…)',v:k.unidade},
+    {k:'meta',l:'Meta',t:'number',v:k.meta},{k:'atual',l:'Valor atual',t:'number',v:k.atual},
+    {k:'menor_melhor',l:'Como interpretar',t:'select',o:[['false','Maior é melhor'],['true','Menor é melhor']],v:String(k.menor_melhor)}],
+    r=>sv('kpis',{...r,menor_melhor:r.menor_melhor==='true',objetivo_id:oid},id)); };
+const ie = (id,oid) => { const i = id ? by(S.inis,id) : {status:STATUS[0]};
+  form(id?'Editar iniciativa':'Nova iniciativa',[{k:'titulo',l:'Título',v:i.titulo},{k:'prazo',l:'Prazo',t:'date',v:i.prazo},
+    {k:'status',l:'Status',t:'select',o:STATUS.map(s=>[s,s]),v:i.status}], r=>sv('iniciativas',{...r,objetivo_id:oid},id)); };
+const le = id => { const sel = S.rels.filter(r=>r.origem_id==id).map(r=>r.destino_id);
+  form('Este objetivo contribui para:',[{k:'d',l:'Selecione os objetivos impactados',t:'checks',v:sel,
+    o:S.objs.filter(o=>o.id!=id).map(o=>[o.id,`[${PERS.find(p=>p[0]==o.perspectiva)[1]}] ${o.titulo}`])}],
+    async r => { await db.from('relacoes').delete().eq('origem_id',id);
+      if(r.d.length) await db.from('relacoes').insert(r.d.map(d=>({origem_id:id,destino_id:d}))); await load(); }); };
+const saveOrg = async () => { await sv('organizacao',{missao:$('#m').value,visao:$('#v').value,valores:$('#val').value},S.org.id); alert('Salvo!'); };
+const go = t => { tab=t; render(); };
+
+// ====== 6) TELAS ======
+const vId = () => `
+ <section class="bg-white rounded-xl p-4 mb-4 space-y-3"><h2 class="font-bold">Identidade Organizacional</h2>
+  ${[['m','Missão','missao'],['v','Visão','visao'],['val','Valores','valores']].map(([i,l,k])=>
+   `<label class="block text-sm font-medium">${l}<textarea id="${i}" rows="3" class="inp">${esc(S.org[k])}</textarea></label>`).join('')}
+  <button class="btn" onclick="saveOrg()">Salvar identidade</button></section>
+ <section class="bg-white rounded-xl p-4"><div class="flex justify-between mb-2"><h2 class="font-bold">Temas Estratégicos (3 a 4)</h2><button class="btn" onclick="te()">+ Tema</button></div>
+  <div class="grid sm:grid-cols-2 gap-3">${S.temas.map(t=>`<div class="rounded-lg p-3 border-l-8" style="border-color:${t.cor};background:${t.cor}15">
+   <b>${esc(t.nome)}</b><p class="text-sm">${esc(t.descricao)}</p>
+   <button class="text-sm" onclick="te(${t.id})">✏️ Editar</button> <button class="text-sm" onclick="dl('temas',${t.id})">🗑 Excluir</button></div>`).join('')||'<p class="text-sm text-slate-500">Nenhum tema ainda.</p>'}</div></section>`;
+
+const kh = k => { const p=pct(k), c=cor(p); return `<div class="flex items-center gap-2 text-xs py-1 border-t">
+  <span class="w-3 h-3 rounded-full shrink-0" style="background:${c}"></span>
+  <div class="flex-1 min-w-0"><b>${esc(k.nome)}</b><div>${k.atual} / ${k.meta} ${esc(k.unidade)} · <b>${p.toFixed(0)}%</b></div>
+  <div class="h-1.5 bg-slate-200 rounded"><div class="h-1.5 rounded" style="width:${Math.min(p,100)}%;background:${c}"></div></div></div>
+  <button onclick="ke(${k.id},${k.objetivo_id})">✏️</button><button onclick="dl('kpis',${k.id})">🗑</button></div>`; };
+const ih = i => `<div class="flex items-center gap-2 text-xs py-1 border-t"><div class="flex-1"><b>${esc(i.titulo)}</b><div>${i.prazo?new Date(i.prazo+'T00:00').toLocaleDateString('pt-BR'):'sem prazo'} · ${i.status}</div></div>
+  <button onclick="ie(${i.id},${i.objetivo_id})">✏️</button><button onclick="dl('iniciativas',${i.id})">🗑</button></div>`;
+const tema = o => { const t = by(S.temas,o.tema_id); return t ? `<span class="text-xs px-2 rounded text-white" style="background:${t.cor}">${esc(t.nome)}</span>` : ''; };
+
+const vPers = () => PERS.map(([key,nome,c]) => `
+ <section class="mb-5"><div class="flex justify-between items-center text-white rounded-t-xl px-3 py-2" style="background:${c}"><h2 class="font-bold">${nome}</h2>
+  <button class="bg-white/25 rounded px-2 text-sm" onclick="oe(0,'${key}')">+ Objetivo</button></div>
+  <div class="grid md:grid-cols-2 gap-3 bg-white rounded-b-xl p-3">${S.objs.filter(o=>o.perspectiva==key).map(o=>`
+   <div class="border rounded-lg p-3"><div class="flex justify-between gap-2"><b>${esc(o.titulo)}</b>
+    <span class="whitespace-nowrap"><button onclick="oe(${o.id})">✏️</button><button onclick="le(${o.id})" title="Causa e efeito">🔗</button><button onclick="dl('objetivos',${o.id})">🗑</button></span></div>
+    <div class="text-xs mb-1">👤 ${esc(o.responsavel)||'—'} ${tema(o)}</div>
+    <div class="text-xs font-semibold mt-2 flex justify-between">KPIs <button onclick="ke(0,${o.id})">+ KPI</button></div>${S.kpis.filter(k=>k.objetivo_id==o.id).map(kh).join('')}
+    <div class="text-xs font-semibold mt-2 flex justify-between">Iniciativas <button onclick="ie(0,${o.id})">+ Iniciativa</button></div>${S.inis.filter(i=>i.objetivo_id==o.id).map(ih).join('')}</div>`).join('')||'<p class="text-sm text-slate-500">Sem objetivos.</p>'}</div></section>`).join('');
+
+const objPct = o => { const ks=S.kpis.filter(k=>k.objetivo_id==o.id); return ks.length ? ks.reduce((s,k)=>s+pct(k),0)/ks.length : null; };
+const vMapa = () => `<p class="text-sm mb-2 text-slate-600">Setas: objetivo de baixo → objetivo que ele impacta (use 🔗 em Perspectivas para criar as ligações).</p>
+ <div id="mapa" class="relative bg-white rounded-xl p-3 space-y-6"><svg id="svg" class="absolute inset-0 w-full h-full pointer-events-none"><defs><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#64748b"/></marker></defs></svg>
+ ${PERS.map(([k,n,c])=>`<div><div class="text-xs font-bold mb-1" style="color:${c}">${n}</div><div class="flex flex-wrap gap-3 justify-center">
+  ${S.objs.filter(o=>o.perspectiva==k).map(o=>{const p=objPct(o);return `<div id="o${o.id}" class="relative border-2 rounded-xl px-3 py-2 text-sm w-44 text-center bg-white" style="border-color:${p==null?c:cor(p)}">${esc(o.titulo)}<div class="text-xs text-slate-500">${esc(o.responsavel)}${p==null?'':' · '+p.toFixed(0)+'%'}</div></div>`}).join('')}</div></div>`).join('')}</div>`;
+function lines(){ const m=$('#mapa'); if(!m) return; const b=m.getBoundingClientRect(), svg=$('#svg');
+  svg.innerHTML += S.rels.map(r=>{ const a=$('#o'+r.origem_id), d=$('#o'+r.destino_id); if(!a||!d) return '';
+    const A=a.getBoundingClientRect(), D=d.getBoundingClientRect();
+    return `<line x1="${A.left+A.width/2-b.left}" y1="${A.top-b.top}" x2="${D.left+D.width/2-b.left}" y2="${D.bottom-b.top+2}" stroke="#64748b" stroke-width="2" marker-end="url(#ar)"/>`; }).join(''); }
+addEventListener('resize', () => tab=='mapa' && render());
+
+const vRel = () => { const resps=[...new Set(S.objs.map(o=>o.responsavel).filter(Boolean))];
+  const os = S.objs.filter(o=>(!F.resp||o.responsavel==F.resp)&&(!F.pers||o.perspectiva==F.pers));
+  const ks = S.kpis.filter(k=>os.some(o=>o.id==k.objetivo_id)), is = S.inis.filter(i=>os.some(o=>o.id==i.objetivo_id));
+  const cnt = c => ks.filter(k=>cor(pct(k))==c).length, avg = ks.length ? ks.reduce((s,k)=>s+pct(k),0)/ks.length : 0;
+  return `<div class="flex flex-wrap gap-2 mb-3 noprint">
+   <select class="inp !w-auto" onchange="F.resp=this.value;render()"><option value="">Todos os responsáveis</option>${resps.map(r=>`<option ${r==F.resp?'selected':''}>${esc(r)}</option>`).join('')}</select>
+   <select class="inp !w-auto" onchange="F.pers=this.value;render()"><option value="">Todas as perspectivas</option>${PERS.map(p=>`<option value="${p[0]}" ${p[0]==F.pers?'selected':''}>${p[1]}</option>`).join('')}</select>
+   <button class="btn" onclick="print()">🖨 Imprimir / PDF</button></div>
+  <div class="grid grid-cols-2 md:grid-cols-5 gap-2 mb-4 text-center">
+   <div class="bg-white rounded-xl p-3"><div class="text-2xl font-bold">${avg.toFixed(0)}%</div><div class="text-xs">Atingimento médio</div></div>
+   ${[['#16a34a','Verdes'],['#eab308','Amarelos'],['#dc2626','Vermelhos']].map(([c,n])=>`<div class="bg-white rounded-xl p-3"><div class="text-2xl font-bold" style="color:${c}">${cnt(c)}</div><div class="text-xs">KPIs ${n}</div></div>`).join('')}
+   <div class="bg-white rounded-xl p-3"><div class="text-2xl font-bold">${is.filter(i=>i.status=='Concluída').length}/${is.length}</div><div class="text-xs">Iniciativas concluídas</div></div></div>
+  <div class="bg-white rounded-xl p-3 overflow-x-auto"><table class="w-full text-sm"><thead><tr class="text-left border-b"><th>Objetivo</th><th>Resp.</th><th>KPIs</th><th>Iniciativas</th></tr></thead><tbody>
+  ${os.map(o=>`<tr class="border-b align-top"><td class="py-2"><b>${esc(o.titulo)}</b><div class="text-xs text-slate-500">${PERS.find(p=>p[0]==o.perspectiva)[1]}</div></td><td>${esc(o.responsavel)}</td>
+   <td>${S.kpis.filter(k=>k.objetivo_id==o.id).map(k=>`<div><span class="inline-block w-2.5 h-2.5 rounded-full" style="background:${cor(pct(k))}"></span> ${esc(k.nome)}: ${pct(k).toFixed(0)}%</div>`).join('')}</td>
+   <td>${S.inis.filter(i=>i.objetivo_id==o.id).map(i=>`<div>${esc(i.titulo)} <i class="text-xs">(${i.status})</i></div>`).join('')}</td></tr>`).join('')}</tbody></table></div>`; };
+
+function render(){
+  $('#app').innerHTML = {identidade:vId,perspectivas:vPers,mapa:vMapa,relatorio:vRel}[tab]();
+  document.querySelectorAll('.tb').forEach(b => b.className = 'tb px-3 py-1 rounded whitespace-nowrap ' + (b.dataset.t==tab ? 'bg-slate-900 text-white' : 'bg-slate-200'));
+  if(tab=='mapa') requestAnimationFrame(lines);
+}
+load();
+</script>
+</body>
+</html>
