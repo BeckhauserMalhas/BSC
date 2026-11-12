@@ -34,15 +34,30 @@ const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const PERS = [['financeira','Financeira','#16a34a'],['clientes','Clientes','#2563eb'],
               ['processos','Processos Internos','#d97706'],['aprendizado','Aprendizado e Crescimento','#7c3aed']];
 const STATUS = ['Não iniciada','Em andamento','Concluída'];
-let S = {org:{},temas:[],objs:[],kpis:[],inis:[],rels:[]}, tab='identidade', F={resp:'',pers:''};
+let S = {org:{},temas:[],objs:[],kpis:[],inis:[],rels:[],vals:[]}, tab='identidade', F={resp:'',pers:''};
 const $ = s => document.querySelector(s);
 const by = (a,id) => a.find(x => x.id == id);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
-// % de atingimento (se "menor é melhor", inverte a conta) e semáforo
-function pct(k){ const m=+k.meta, a=+k.atual; if(!m) return 0;
-  return k.menor_melhor ? (a<=0 ? 100 : m/a*100) : a/m*100; }
-const cor = p => p>=90 ? '#16a34a' : p>=70 ? '#eab308' : '#dc2626';   // verde / amarelo / vermelho
+let ANO = new Date().getFullYear();
+const MES = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
+const COR = {azul:'#2563eb',verde:'#16a34a',amarelo:'#eab308',vermelho:'#dc2626'};
+const vk = (kid,mes) => S.vals.find(v => v.kpi_id==kid && v.ano==ANO && v.mes==mes);          // lançamento do mês
+const ult = k => S.vals.filter(v => v.kpi_id==k.id && v.ano==ANO && v.atual!=null).sort((a,b)=>b.mes-a.mes)[0]; // último mês lançado
+const pct = (k,v) => { const m=+v.meta, a=+v.atual; if(!m) return 0; return k.menor_melhor ? (a<=0?100:m/a*100) : a/m*100; };
+// "abaixo da meta" (se menor é melhor, abaixo = valor acima da meta)
+const abaixo = (k,v) => !!v && v.meta!=null && v.atual!=null && (k.menor_melhor ? v.atual>v.meta : v.atual<v.meta);
+const semIni = (k,mes) => !S.inis.some(i => i.kpi_id==k.id && i.ano==ANO && i.mes==mes);
+// Faixa de cor: compara o desvio (atual - meta) com os limites configurados no KPI
+function faixa(k,v){ if(!v || v.atual==null || v.meta==null) return null;
+  const m = Math.abs(+v.meta), lim = (x,t) => t=='num' ? +x : m*(+x)/100;
+  const d = (k.menor_melhor ? -1 : 1) * (v.atual - v.meta);
+  if(k.azul!=null && d > lim(k.azul,k.tipo_azul)) return 'azul';
+  if(d < -lim(k.verm,k.tipo_verm)) return 'vermelho';
+  if(d < -lim(k.amar,k.tipo_amar)) return 'amarelo';
+  return 'verde'; }
+const anoSel = () => { const b=new Date().getFullYear(), a=[]; for(let y=b-2;y<=b+3;y++) a.push(y);
+  return `<div class="noprint mb-3 text-sm font-medium">Ano <select class="inp !w-auto" onchange="ANO=+this.value;render()">${a.map(y=>`<option ${y==ANO?'selected':''}>${y}</option>`).join('')}</select></div>`; };
 
 // ====== 3) BANCO DE DADOS ======
 // ====== LOGIN E PERFIS ======
@@ -69,11 +84,11 @@ async function entrar(ev){ ev.preventDefault(); const f = ev.target;
   if(error) $('#erro').textContent = 'E-mail ou senha incorretos.'; else init(); }
 
 async function load(){
-  const names = ['organizacao','temas','objetivos','kpis','iniciativas','relacoes'];
+  const names = ['organizacao','temas','objetivos','kpis','iniciativas','relacoes','kpi_valores'];
   const r = await Promise.all(names.map(n => db.from(n).select('*').order('id')));
   const err = r.find(x => x.error);
   if(err){ $('#app').innerHTML = `<p class="p-4 bg-red-100 rounded">Erro ao conectar: ${esc(err.error.message)}<br>Confira as chaves e se rodou o schema.sql.</p>`; return; }
-  [S.orgs,S.temas,S.objs,S.kpis,S.inis,S.rels] = r.map(x => x.data);
+  [S.orgs,S.temas,S.objs,S.kpis,S.inis,S.rels,S.vals] = r.map(x => x.data);
   S.org = S.orgs[0] || {};
   render();
 }
@@ -89,7 +104,7 @@ async function dl(table,id){ if(!confirm('Excluir? (itens ligados também serão
 function form(title, fields, onSave){
   const m = document.createElement('div');
   m.className = 'fixed inset-0 bg-black/50 flex items-center justify-center p-3 z-50 overflow-auto';
-  const inp = f => f.t==='select' ? `<select name="${f.k}" class="inp">${f.o.map(o=>`<option value="${o[0]}" ${o[0]==f.v?'selected':''}>${esc(o[1])}</option>`).join('')}</select>`
+  const inp = f => f.t==='info' ? `<div class="text-xs font-normal text-slate-500">${f.v}</div>` : f.t==='select' ? `<select name="${f.k}" class="inp">${f.o.map(o=>`<option value="${o[0]}" ${o[0]==f.v?'selected':''}>${esc(o[1])}</option>`).join('')}</select>`
     : f.t==='area' ? `<textarea name="${f.k}" rows="3" class="inp">${esc(f.v)}</textarea>`
     : f.t==='checks' ? f.o.map(o=>`<div><label class="font-normal"><input type="checkbox" name="${f.k}" value="${o[0]}" ${(f.v||[]).includes(o[0])?'checked':''}> ${esc(o[1])}</label></div>`).join('')
     : `<input name="${f.k}" type="${f.t||'text'}" ${f.t==='number'?'step="any"':''} value="${esc(f.v)}" class="inp">`;
@@ -100,10 +115,10 @@ function form(title, fields, onSave){
   m.querySelector('#cx').onclick = () => m.remove();
   m.querySelector('form').onsubmit = async e => { e.preventDefault();
     const fd = new FormData(e.target), r = {};
-    fields.forEach(f => { r[f.k] = f.t==='checks' ? fd.getAll(f.k).map(Number)
+    fields.forEach(f => { if(f.t==='info') return; r[f.k] = f.t==='checks' ? fd.getAll(f.k).map(Number)
       : (f.t==='number'||f.k.endsWith('_id')||f.t==='date') && fd.get(f.k)==='' ? null
       : f.t==='number' ? Number(fd.get(f.k)) : fd.get(f.k); });
-    m.remove(); await onSave(r); };
+    const er = await onSave(r); if(er) alert(er); else m.remove(); };
 }
 
 // ====== 5) AÇÕES (editar/criar) ======
@@ -114,11 +129,32 @@ const oe = (id,p) => { const o = id ? by(S.objs,id) : {perspectiva:p};
   form(id?'Editar objetivo':'Novo objetivo',[{k:'titulo',l:'Objetivo estratégico',v:o.titulo},{k:'responsavel',l:'Responsável (dono)',v:o.responsavel},
     {k:'tema_id',l:'Tema estratégico',t:'select',o:[['','— nenhum —'],...S.temas.map(t=>[t.id,t.nome])],v:o.tema_id}],
     r=>sv('objetivos',{...r,perspectiva:o.perspectiva},id)); };
-const ke = (id,oid) => { const k = id ? by(S.kpis,id) : {menor_melhor:false,atual:0};
-  form(id?'Editar KPI':'Novo KPI',[{k:'nome',l:'Indicador',v:k.nome},{k:'unidade',l:'Unidade (%, R$, un…)',v:k.unidade},
-    {k:'meta',l:'Meta',t:'number',v:k.meta},{k:'atual',l:'Valor atual',t:'number',v:k.atual},
-    {k:'menor_melhor',l:'Como interpretar',t:'select',o:[['false','Maior é melhor'],['true','Menor é melhor']],v:String(k.menor_melhor)}],
+const TP = [['pct','Percentual (%) da meta'],['num','Número (unidade do KPI)']];
+const ke = (id,oid) => { const k = id ? by(S.kpis,id) : {menor_melhor:false,verm:10,tipo_verm:'pct',amar:5,tipo_amar:'pct',azul:20,tipo_azul:'pct'};
+  form(id?'Editar KPI':'Novo KPI',[{k:'nome',l:'Indicador',v:k.nome},{k:'detalhe',l:'Detalhe do Indicador (como é calculado)',t:'area',v:k.detalhe},
+    {k:'unidade',l:'Unidade (%, R$, un…)',v:k.unidade},
+    {k:'menor_melhor',l:'Como interpretar',t:'select',o:[['false','Maior é melhor'],['true','Menor é melhor']],v:String(k.menor_melhor)},
+    {t:'info',k:'i1',l:'Faixas de cor',v:'Variação em relação à meta do mês. "Abaixo" significa pior que a meta (se menor é melhor, é o valor acima dela).'},
+    {k:'verm',l:'🔴 Vermelho: pior que a meta em mais de',t:'number',v:k.verm},{k:'tipo_verm',l:'Vermelho medido em',t:'select',o:TP,v:k.tipo_verm},
+    {k:'amar',l:'🟡 Amarelo: pior que a meta em mais de (até o limite do vermelho)',t:'number',v:k.amar},{k:'tipo_amar',l:'Amarelo medido em',t:'select',o:TP,v:k.tipo_amar},
+    {t:'info',k:'i2',l:'🟢 Verde',v:'Automático: do limite do amarelo até o limite do azul.'},
+    {k:'azul',l:'🔵 Azul: melhor que a meta em mais de',t:'number',v:k.azul},{k:'tipo_azul',l:'Azul medido em',t:'select',o:TP,v:k.tipo_azul}],
     r=>sv('kpis',{...r,menor_melhor:r.menor_melhor==='true',objetivo_id:oid},id)); };
+// Lançamento de um mês: meta + realizado (+ iniciativa, obrigatória se abaixo da meta)
+const lc = (kid,mes) => { const k=by(S.kpis,kid), ex=vk(kid,mes),
+  pv=S.vals.filter(x=>x.kpi_id==kid).sort((a,b)=>(b.ano*12+b.mes)-(a.ano*12+a.mes))[0];
+  form(`${esc(k.nome)} – ${MES[mes-1]}/${ANO}`,[{k:'meta',l:'Meta do mês',t:'number',v:ex?ex.meta:pv?.meta},{k:'atual',l:'Valor atual (realizado)',t:'number',v:ex?.atual},
+    {t:'info',k:'x',l:'Iniciativa do mês',v:'Obrigatória quando o realizado ficar abaixo da meta e o mês ainda não tiver iniciativa.'},
+    {k:'it',l:'Título da iniciativa',v:''},{k:'prazo',l:'Prazo',t:'date',v:''},{k:'status',l:'Status',t:'select',o:STATUS.map(s=>[s,s]),v:STATUS[0]}],
+    async r => {
+      if(abaixo(k,r) && semIni(k,mes) && !r.it) return 'Valor abaixo da meta: informe uma iniciativa para este mês.';
+      const q = ex ? await db.from('kpi_valores').update({meta:r.meta,atual:r.atual}).eq('id',ex.id)
+                   : await db.from('kpi_valores').insert({kpi_id:kid,ano:ANO,mes,meta:r.meta,atual:r.atual});
+      if(q.error) return q.error.message;
+      if(r.it){ const w = await db.from('iniciativas').insert({titulo:r.it,prazo:r.prazo,status:r.status,objetivo_id:k.objetivo_id,kpi_id:kid,ano:ANO,mes});
+        if(w.error) return w.error.message; }
+      await load(); }); };
+
 const ie = (id,oid) => { const i = id ? by(S.inis,id) : {status:STATUS[0]};
   form(id?'Editar iniciativa':'Nova iniciativa',[{k:'titulo',l:'Título',v:i.titulo},{k:'prazo',l:'Prazo',t:'date',v:i.prazo},
     {k:'status',l:'Status',t:'select',o:STATUS.map(s=>[s,s]),v:i.status}], r=>sv('iniciativas',{...r,objetivo_id:oid},id)); };
@@ -141,16 +177,20 @@ const vId = () => `
    <b>${esc(t.nome)}</b><p class="text-sm">${esc(t.descricao)}</p>
    <button class="text-sm" onclick="te(${t.id})">✏️ Editar</button> <button class="text-sm" onclick="dl('temas',${t.id})">🗑 Excluir</button></div>`).join('')||'<p class="text-sm text-slate-500">Nenhum tema ainda.</p>'}</div></section>`;
 
-const kh = k => { const p=pct(k), c=cor(p); return `<div class="flex items-center gap-2 text-xs py-1 border-t">
-  <span class="w-3 h-3 rounded-full shrink-0" style="background:${c}"></span>
-  <div class="flex-1 min-w-0"><b>${esc(k.nome)}</b><div>${k.atual} / ${k.meta} ${esc(k.unidade)} · <b>${p.toFixed(0)}%</b></div>
-  <div class="h-1.5 bg-slate-200 rounded"><div class="h-1.5 rounded" style="width:${Math.min(p,100)}%;background:${c}"></div></div></div>
-  <button onclick="ke(${k.id},${k.objetivo_id})">✏️</button><button onclick="dl('kpis',${k.id})">🗑</button></div>`; };
-const ih = i => `<div class="flex items-center gap-2 text-xs py-1 border-t"><div class="flex-1"><b>${esc(i.titulo)}</b><div>${i.prazo?new Date(i.prazo+'T00:00').toLocaleDateString('pt-BR'):'sem prazo'} · ${i.status}</div></div>
+const strip = (k,ed) => `<div class="grid grid-cols-6 sm:grid-cols-12 gap-1 mt-1">${MES.map((n,i)=>{ const m=i+1, v=vk(k.id,m), f=faixa(k,v), pend=abaixo(k,v)&&semIni(k,m), click=ed&&EDIT;
+  return `<div ${click?`onclick="lc(${k.id},${m})"`:''} class="rounded border text-center text-[10px] py-1 ${click?'cursor-pointer':''}" style="background:${f?COR[f]:'#f1f5f9'};color:${f?(f=='amarelo'?'#000':'#fff'):'#64748b'}">${n}<div class="font-bold">${v?.atual??'–'}</div><div>${v?.meta!=null?'m '+v.meta:'&nbsp;'}</div>${pend?'<div title="Falta iniciativa">⚠</div>':''}</div>`; }).join('')}</div>`;
+const kh = k => { const v=ult(k), f=faixa(k,v); return `<div class="text-xs py-2 border-t">
+  <div class="flex items-center gap-2"><span class="w-3 h-3 rounded-full shrink-0" style="background:${f?COR[f]:'#cbd5e1'}"></span><b class="flex-1">${esc(k.nome)}</b><span>${v?pct(k,v).toFixed(0)+'%':''}</span>
+  <button onclick="ke(${k.id},${k.objetivo_id})">✏️</button><button onclick="dl('kpis',${k.id})">🗑</button></div>
+  ${k.detalhe?`<details><summary class="cursor-pointer text-slate-500">Como é calculado</summary><p class="whitespace-pre-line">${esc(k.detalhe)}</p></details>`:''}
+  <div class="text-slate-500">${esc(k.unidade)}${EDIT?' · toque no mês para lançar meta e realizado':''}</div>${strip(k,1)}
+  ${S.inis.filter(i=>i.kpi_id==k.id&&i.ano==ANO).map(ih).join('')}</div>`; };
+
+const ih = i => `<div class="flex items-center gap-2 text-xs py-1 border-t"><div class="flex-1"><b>${i.mes?MES[i.mes-1]+'/'+i.ano+' – ':''}${esc(i.titulo)}</b><div>${i.prazo?new Date(i.prazo+'T00:00').toLocaleDateString('pt-BR'):'sem prazo'} · ${i.status}</div></div>
   <button onclick="ie(${i.id},${i.objetivo_id})">✏️</button><button onclick="dl('iniciativas',${i.id})">🗑</button></div>`;
 const tema = o => { const t = by(S.temas,o.tema_id); return t ? `<span class="text-xs px-2 rounded text-white" style="background:${t.cor}">${esc(t.nome)}</span>` : ''; };
 
-const vPers = () => PERS.map(([key,nome,c]) => `
+const vPers = () => anoSel()+PERS.map(([key,nome,c]) => `
  <section class="mb-5"><div class="flex justify-between items-center text-white rounded-t-xl px-3 py-2" style="background:${c}"><h2 class="font-bold">${nome}</h2>
   <button class="bg-white/25 rounded px-2 text-sm" onclick="oe(0,'${key}')">+ Objetivo</button></div>
   <div class="grid md:grid-cols-2 gap-3 bg-white rounded-b-xl p-3">${S.objs.filter(o=>o.perspectiva==key).map(o=>`
@@ -158,13 +198,16 @@ const vPers = () => PERS.map(([key,nome,c]) => `
     <span class="whitespace-nowrap"><button onclick="oe(${o.id})">✏️</button><button onclick="le(${o.id})" title="Causa e efeito">🔗</button><button onclick="dl('objetivos',${o.id})">🗑</button></span></div>
     <div class="text-xs mb-1">👤 ${esc(o.responsavel)||'—'} ${tema(o)}</div>
     <div class="text-xs font-semibold mt-2 flex justify-between">KPIs <button onclick="ke(0,${o.id})">+ KPI</button></div>${S.kpis.filter(k=>k.objetivo_id==o.id).map(kh).join('')}
-    <div class="text-xs font-semibold mt-2 flex justify-between">Iniciativas <button onclick="ie(0,${o.id})">+ Iniciativa</button></div>${S.inis.filter(i=>i.objetivo_id==o.id).map(ih).join('')}</div>`).join('')||'<p class="text-sm text-slate-500">Sem objetivos.</p>'}</div></section>`).join('');
+    <div class="text-xs font-semibold mt-2 flex justify-between">Iniciativas <button onclick="ie(0,${o.id})">+ Iniciativa</button></div>${S.inis.filter(i=>i.objetivo_id==o.id&&!i.kpi_id).map(ih).join('')}</div>`).join('')||'<p class="text-sm text-slate-500">Sem objetivos.</p>'}</div></section>`).join('');
 
-const objPct = o => { const ks=S.kpis.filter(k=>k.objetivo_id==o.id); return ks.length ? ks.reduce((s,k)=>s+pct(k),0)/ks.length : null; };
-const vMapa = () => `<p class="text-sm mb-2 text-slate-600">Setas: objetivo de baixo → objetivo que ele impacta (use 🔗 em Perspectivas para criar as ligações).</p>
+const ORD = ['vermelho','amarelo','verde','azul'];
+const objPct = o => { const fs = S.kpis.filter(k=>k.objetivo_id==o.id).map(k=>{const v=ult(k); return v?{f:faixa(k,v),p:pct(k,v)}:null}).filter(x=>x&&x.f);
+  return fs.length ? {f:ORD[Math.min(...fs.map(x=>ORD.indexOf(x.f)))], v:fs.reduce((a,x)=>a+x.p,0)/fs.length} : null; };
+
+const vMapa = () => anoSel()+`<p class="text-sm mb-2 text-slate-600">Setas: objetivo de baixo → objetivo que ele impacta (use 🔗 em Perspectivas para criar as ligações).</p>
  <div id="mapa" class="relative bg-white rounded-xl p-3 space-y-6"><svg id="svg" class="absolute inset-0 w-full h-full pointer-events-none"><defs><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#64748b"/></marker></defs></svg>
  ${PERS.map(([k,n,c])=>`<div><div class="text-xs font-bold mb-1" style="color:${c}">${n}</div><div class="flex flex-wrap gap-3 justify-center">
-  ${S.objs.filter(o=>o.perspectiva==k).map(o=>{const p=objPct(o);return `<div id="o${o.id}" class="relative border-2 rounded-xl px-3 py-2 text-sm w-44 text-center bg-white" style="border-color:${p==null?c:cor(p)}">${esc(o.titulo)}<div class="text-xs text-slate-500">${esc(o.responsavel)}${p==null?'':' · '+p.toFixed(0)+'%'}</div></div>`}).join('')}</div></div>`).join('')}</div>`;
+  ${S.objs.filter(o=>o.perspectiva==k).map(o=>{const p=objPct(o);return `<div id="o${o.id}" class="relative border-2 rounded-xl px-3 py-2 text-sm w-44 text-center bg-white" style="border-color:${p==null?c:COR[p.f]}">${esc(o.titulo)}<div class="text-xs text-slate-500">${esc(o.responsavel)}${p==null?'':' · '+p.v.toFixed(0)+'%'}</div></div>`}).join('')}</div></div>`).join('')}</div>`;
 function lines(){ const m=$('#mapa'); if(!m) return; const b=m.getBoundingClientRect(), svg=$('#svg');
   svg.innerHTML += S.rels.map(r=>{ const a=$('#o'+r.origem_id), d=$('#o'+r.destino_id); if(!a||!d) return '';
     const A=a.getBoundingClientRect(), D=d.getBoundingClientRect();
@@ -173,20 +216,21 @@ addEventListener('resize', () => tab=='mapa' && render());
 
 const vRel = () => { const resps=[...new Set(S.objs.map(o=>o.responsavel).filter(Boolean))];
   const os = S.objs.filter(o=>(!F.resp||o.responsavel==F.resp)&&(!F.pers||o.perspectiva==F.pers));
-  const ks = S.kpis.filter(k=>os.some(o=>o.id==k.objetivo_id)), is = S.inis.filter(i=>os.some(o=>o.id==i.objetivo_id));
-  const cnt = c => ks.filter(k=>cor(pct(k))==c).length, avg = ks.length ? ks.reduce((s,k)=>s+pct(k),0)/ks.length : 0;
-  return `<div class="flex flex-wrap gap-2 mb-3 noprint">
+  const ks = S.kpis.filter(k=>os.some(o=>o.id==k.objetivo_id)), fs = ks.map(k=>faixa(k,ult(k))).filter(Boolean), pend = [];
+  ks.forEach(k=>S.vals.filter(v=>v.ano==ANO&&v.kpi_id==k.id&&abaixo(k,v)&&semIni(k,v.mes)).forEach(v=>pend.push(`${k.nome} (${MES[v.mes-1]})`)));
+  const is = S.inis.filter(i=>os.some(o=>o.id==i.objetivo_id)&&(!i.ano||i.ano==ANO));
+  return anoSel()+`<div class="flex flex-wrap gap-2 mb-3 noprint">
    <select class="inp !w-auto" onchange="F.resp=this.value;render()"><option value="">Todos os responsáveis</option>${resps.map(r=>`<option ${r==F.resp?'selected':''}>${esc(r)}</option>`).join('')}</select>
    <select class="inp !w-auto" onchange="F.pers=this.value;render()"><option value="">Todas as perspectivas</option>${PERS.map(p=>`<option value="${p[0]}" ${p[0]==F.pers?'selected':''}>${p[1]}</option>`).join('')}</select>
    <button class="btn keep" onclick="print()">🖨 Imprimir / PDF</button></div>
-  <div class="grid grid-cols-2 md:grid-cols-5 gap-2 mb-4 text-center">
-   <div class="bg-white rounded-xl p-3"><div class="text-2xl font-bold">${avg.toFixed(0)}%</div><div class="text-xs">Atingimento médio</div></div>
-   ${[['#16a34a','Verdes'],['#eab308','Amarelos'],['#dc2626','Vermelhos']].map(([c,n])=>`<div class="bg-white rounded-xl p-3"><div class="text-2xl font-bold" style="color:${c}">${cnt(c)}</div><div class="text-xs">KPIs ${n}</div></div>`).join('')}
-   <div class="bg-white rounded-xl p-3"><div class="text-2xl font-bold">${is.filter(i=>i.status=='Concluída').length}/${is.length}</div><div class="text-xs">Iniciativas concluídas</div></div></div>
-  <div class="bg-white rounded-xl p-3 overflow-x-auto"><table class="w-full text-sm"><thead><tr class="text-left border-b"><th>Objetivo</th><th>Resp.</th><th>KPIs</th><th>Iniciativas</th></tr></thead><tbody>
-  ${os.map(o=>`<tr class="border-b align-top"><td class="py-2"><b>${esc(o.titulo)}</b><div class="text-xs text-slate-500">${PERS.find(p=>p[0]==o.perspectiva)[1]}</div></td><td>${esc(o.responsavel)}</td>
-   <td>${S.kpis.filter(k=>k.objetivo_id==o.id).map(k=>`<div><span class="inline-block w-2.5 h-2.5 rounded-full" style="background:${cor(pct(k))}"></span> ${esc(k.nome)}: ${pct(k).toFixed(0)}%</div>`).join('')}</td>
-   <td>${S.inis.filter(i=>i.objetivo_id==o.id).map(i=>`<div>${esc(i.titulo)} <i class="text-xs">(${i.status})</i></div>`).join('')}</td></tr>`).join('')}</tbody></table></div>`; };
+  <div class="grid grid-cols-3 md:grid-cols-6 gap-2 mb-4 text-center">
+   ${ORD.slice().reverse().map(f=>`<div class="bg-white rounded-xl p-3"><div class="text-2xl font-bold" style="color:${COR[f]}">${fs.filter(x=>x==f).length}</div><div class="text-xs">KPIs ${f}s</div></div>`).join('')}
+   <div class="bg-white rounded-xl p-3"><div class="text-2xl font-bold">${is.filter(i=>i.status=='Concluída').length}/${is.length}</div><div class="text-xs">Iniciativas concluídas</div></div>
+   <div class="bg-white rounded-xl p-3"><div class="text-2xl font-bold ${pend.length?'text-red-600':''}">${pend.length}</div><div class="text-xs">Meses sem iniciativa</div></div></div>
+  ${pend.length?`<div class="bg-red-50 border border-red-300 rounded-xl p-3 mb-4 text-sm">⚠ <b>Abaixo da meta sem iniciativa:</b> ${pend.map(esc).join('; ')}</div>`:''}
+  ${os.map(o=>`<div class="bg-white rounded-xl p-3 mb-3"><b>${esc(o.titulo)}</b> <span class="text-xs text-slate-500">${PERS.find(p=>p[0]==o.perspectiva)[1]} · ${esc(o.responsavel)||'—'}</span>
+   ${S.kpis.filter(k=>k.objetivo_id==o.id).map(k=>`<div class="text-xs mt-2"><b>${esc(k.nome)}</b> ${k.detalhe?'<i class="text-slate-500">– '+esc(k.detalhe)+'</i>':''}${strip(k,0)}
+    ${S.inis.filter(i=>i.kpi_id==k.id&&i.ano==ANO).map(i=>`<div>• ${MES[i.mes-1]}: ${esc(i.titulo)} <i>(${i.status})</i></div>`).join('')}</div>`).join('')}</div>`).join('')}`; };
 
 function render(){
   $('#app').innerHTML = {identidade:vId,perspectivas:vPers,mapa:vMapa,relatorio:vRel}[tab]();
