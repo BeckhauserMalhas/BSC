@@ -12,16 +12,13 @@
 </head>
 <body class="bg-slate-100 text-slate-800">
 
-<!-- ====== 1) CONFIGURAÇÃO: cole aqui as chaves do Supabase (veja GUIA.md) ====== -->
-<script>
-const SUPABASE_URL = "https://phjomfiowlmgplchjpqv.supabase.co";
-const SUPABASE_KEY = "sb_publishable_ZgbgvbXxwTjBHNAPplA6kg_VtV6V1TV";
-</script>
+<!-- ====== 1) CONFIGURAÇÃO: as chaves do Supabase ficam no arquivo config.js ====== -->
+<script src="config.js"></script>
 
 <header class="bg-white shadow noprint sticky top-0 z-40">
   <div class="max-w-6xl mx-auto px-3 py-2">
-    <h1 class="font-bold text-lg">📊 Balanced Scorecard</h1>
-    <nav class="flex gap-1 overflow-x-auto mt-1 text-sm">
+    <div class="flex justify-between items-center gap-2"><h1 class="font-bold text-lg">📊 Balanced Scorecard</h1><span id="quem" class="text-xs text-right"></span></div>
+    <nav id="nav" class="hidden flex gap-1 overflow-x-auto mt-1 text-sm">
       <button class="tb px-3 py-1 rounded" data-t="identidade" onclick="go('identidade')">Identidade</button>
       <button class="tb px-3 py-1 rounded" data-t="perspectivas" onclick="go('perspectivas')">Perspectivas</button>
       <button class="tb px-3 py-1 rounded" data-t="mapa" onclick="go('mapa')">Mapa Estratégico</button>
@@ -48,6 +45,29 @@ function pct(k){ const m=+k.meta, a=+k.atual; if(!m) return 0;
 const cor = p => p>=90 ? '#16a34a' : p>=70 ? '#eab308' : '#dc2626';   // verde / amarelo / vermelho
 
 // ====== 3) BANCO DE DADOS ======
+// ====== LOGIN E PERFIS ======
+// Editor: pode alterar tudo. Leitor: só visualiza. (A regra real está no banco: migracao_login.sql)
+let EDIT = false;
+async function init(){
+  const {data:{session}} = await db.auth.getSession();
+  if(!session) return login();
+  const p = await db.from('perfis').select('papel').eq('id',session.user.id).maybeSingle();
+  EDIT = p.data?.papel === 'editor';
+  $('#nav').classList.remove('hidden');
+  $('#quem').innerHTML = `${esc(session.user.email)} · ${EDIT?'Editor':'Leitor'} <button class="underline" onclick="db.auth.signOut().then(init)">Sair</button>`;
+  load();
+}
+function login(){
+  $('#nav').classList.add('hidden'); $('#quem').textContent = '';
+  $('#app').innerHTML = `<form class="bg-white rounded-xl p-5 max-w-sm mx-auto mt-10 space-y-3" onsubmit="entrar(event)"><h2 class="font-bold">Entrar</h2>
+   <label class="block text-sm font-medium">E-mail<input name="e" type="email" required class="inp"></label>
+   <label class="block text-sm font-medium">Senha<input name="s" type="password" required class="inp"></label>
+   <p id="erro" class="text-sm text-red-600"></p><button class="btn w-full">Entrar</button></form>`;
+}
+async function entrar(ev){ ev.preventDefault(); const f = ev.target;
+  const {error} = await db.auth.signInWithPassword({email:f.e.value, password:f.s.value});
+  if(error) $('#erro').textContent = 'E-mail ou senha incorretos.'; else init(); }
+
 async function load(){
   const names = ['organizacao','temas','objetivos','kpis','iniciativas','relacoes'];
   const r = await Promise.all(names.map(n => db.from(n).select('*').order('id')));
@@ -158,7 +178,7 @@ const vRel = () => { const resps=[...new Set(S.objs.map(o=>o.responsavel).filter
   return `<div class="flex flex-wrap gap-2 mb-3 noprint">
    <select class="inp !w-auto" onchange="F.resp=this.value;render()"><option value="">Todos os responsáveis</option>${resps.map(r=>`<option ${r==F.resp?'selected':''}>${esc(r)}</option>`).join('')}</select>
    <select class="inp !w-auto" onchange="F.pers=this.value;render()"><option value="">Todas as perspectivas</option>${PERS.map(p=>`<option value="${p[0]}" ${p[0]==F.pers?'selected':''}>${p[1]}</option>`).join('')}</select>
-   <button class="btn" onclick="print()">🖨 Imprimir / PDF</button></div>
+   <button class="btn keep" onclick="print()">🖨 Imprimir / PDF</button></div>
   <div class="grid grid-cols-2 md:grid-cols-5 gap-2 mb-4 text-center">
    <div class="bg-white rounded-xl p-3"><div class="text-2xl font-bold">${avg.toFixed(0)}%</div><div class="text-xs">Atingimento médio</div></div>
    ${[['#16a34a','Verdes'],['#eab308','Amarelos'],['#dc2626','Vermelhos']].map(([c,n])=>`<div class="bg-white rounded-xl p-3"><div class="text-2xl font-bold" style="color:${c}">${cnt(c)}</div><div class="text-xs">KPIs ${n}</div></div>`).join('')}
@@ -172,8 +192,10 @@ function render(){
   $('#app').innerHTML = {identidade:vId,perspectivas:vPers,mapa:vMapa,relatorio:vRel}[tab]();
   document.querySelectorAll('.tb').forEach(b => b.className = 'tb px-3 py-1 rounded whitespace-nowrap ' + (b.dataset.t==tab ? 'bg-slate-900 text-white' : 'bg-slate-200'));
   if(tab=='mapa') requestAnimationFrame(lines);
+  // Leitor: esconde botões de edição e trava os campos de texto
+  if(!EDIT) document.querySelectorAll('#app button:not(.keep), #app textarea').forEach(e => e.tagName=='BUTTON' ? e.remove() : e.disabled = true);
 }
-load();
+init();
 </script>
 </body>
 </html>
